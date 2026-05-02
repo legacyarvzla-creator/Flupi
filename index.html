@@ -2,49 +2,43 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>WebAR Alpha Video - Grabar Cámara + AR</title>
+    <title>WebAR - Grabar Entorno + Animación</title>
     <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
     <style>
-        /* Estilos para el botón de grabación */
         #recording-btn {
             position: fixed;
             bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
-            z-index: 999;
+            z-index: 1000;
             padding: 15px 25px;
             border-radius: 50px;
-            border: none;
             background-color: #ff0000;
             color: white;
+            font-family: Arial, sans-serif;
             font-weight: bold;
+            border: none;
             cursor: pointer;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-            font-family: sans-serif;
-        }
-        #recording-btn:active {
-            transform: translateX(-50%) scale(0.95);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
         }
         #recording-btn.recording {
-            background-color: #555;
-            animation: pulse 1.5s infinite;
+            background-color: #222;
+            animation: pulse 1s infinite;
         }
-        /* Ocultar el canvas de mezcla técnico */
-        #recorder-canvas {
-            display: none;
-        }
-
         @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.7; }
-            100% { opacity: 1; }
+            0% { transform: translateX(-50%) scale(1); }
+            50% { transform: translateX(-50%) scale(1.05); }
+            100% { transform: translateX(-50%) scale(1); }
+        }
+        /* Canvas de mezcla oculto */
+        #recording-canvas {
+            display: none;
         }
     </style>
 
     <script>
-        // Tu Shader original para Video SBS con Alpha
         AFRAME.registerShader('video-alpha-sbs-shader', {
             schema: { src: {type: 'map', is: 'uniform'} },
             vertexShader: `
@@ -70,24 +64,21 @@
 </head>
 
 <body>
-    <!-- Botón de Interfaz -->
-    <button id="recording-btn">Grabar Video</button>
+    <button id="recording-btn">Iniciar Grabación</button>
+    <canvas id="recording-canvas"></canvas>
 
-    <!-- Canvas oculto donde haremos la mezcla de cámara + AR -->
-    <canvas id="recorder-canvas"></canvas>
-
-    <!-- Escena A-Frame. Añadimos preserveDrawingBuffer para poder capturar el canvas -->
-    <a-scene mindar-image="imageTargetSrc: ./targets.mind;" color-space="sRGB" renderer="colorManagement: true; preserveDrawingBuffer: true" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
+    <a-scene mindar-image="imageTargetSrc: ./targets.mind;" 
+             renderer="preserveDrawingBuffer: true; antialias: true; colorManagement: true" 
+             vr-mode-ui="enabled: false" 
+             device-orientation-permission-ui="enabled: false">
         
         <a-assets>
-            <!-- Tu video de animación -->
             <video id="vid" src="Video_WebAR.mp4" preload="auto" loop="true" crossorigin="anonymous" playsinline webkit-playsinline></video>
         </a-assets>
 
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
         <a-entity mindar-image-target="targetIndex: 0">
-            <!-- El plano AR que se superpone -->
             <a-entity geometry="primitive: plane; width: 1; height: 1"
                       material="shader: video-alpha-sbs-shader; src: #vid; transparent: true">
             </a-entity>
@@ -95,108 +86,87 @@
     </a-scene>
 
     <script>
-        // Lógica de Video (Play/Pause al detectar target)
-        const targetEl = document.querySelector('[mindar-image-target]');
-        const videoAnimation = document.querySelector('#vid');
-        
-        targetEl.addEventListener("targetFound", () => videoAnimation.play());
-        targetEl.addEventListener("targetLost", () => videoAnimation.pause());
-
-        // --- LÓGICA DE GRABACIÓN COMPLETA (CÁMARA + AR) ---
         const btn = document.getElementById('recording-btn');
-        const recorderCanvas = document.getElementById('recorder-canvas');
-        const recorderCtx = recorderCanvas.getContext('2d');
-
+        const recordingCanvas = document.getElementById('recording-canvas');
+        const ctx = recordingCanvas.getContext('2d');
+        const videoAnim = document.querySelector('#vid');
+        
         let mediaRecorder;
-        let recordedChunks = [];
+        let chunks = [];
         let isRecording = false;
-        let mixInterval;
+
+        // Control de reproducción del video AR
+        const targetEl = document.querySelector('[mindar-image-target]');
+        targetEl.addEventListener("targetFound", () => videoAnim.play());
+        targetEl.addEventListener("targetLost", () => videoAnim.pause());
 
         btn.addEventListener('click', () => {
-            if (isRecording) {
-                stopRecording();
+            if (!isRecording) {
+                startCapture();
             } else {
-                startRecording();
+                stopCapture();
             }
         });
 
-        async function startRecording() {
-            recordedChunks = [];
-            
-            // 1. Obtener los elementos técnicos
+        function startCapture() {
+            // Buscamos el video de la cámara que crea MindAR
+            const cameraVideo = document.querySelector('video:not([id])') || document.querySelector('video');
             const aframeCanvas = document.querySelector('canvas.a-canvas');
-            // MindAR crea un video para la cámara, generalmente es el único video sin ID
-            const cameraVideo = document.querySelector('video:not([id])'); 
 
-            if (!cameraVideo) {
-                alert("Error: No se pudo detectar la cámara web para la mezcla.");
+            if (!cameraVideo || !aframeCanvas) {
+                alert("No se encontró la fuente de video o el canvas AR");
                 return;
             }
 
-            // 2. Configurar el canvas de mezcla para que coincida con la cámara
-            recorderCanvas.width = cameraVideo.videoWidth;
-            recorderCanvas.height = cameraVideo.videoHeight;
-
-            // 3. Función de mezcla (Compositing) en cada frame
-            function mixFrames() {
-                if (!isRecording) return;
-
-                // Dibujar primero el fondo: la cámara web (la persona)
-                recorderCtx.drawImage(cameraVideo, 0, 0, recorderCanvas.width, recorderCanvas.height);
-                
-                // Dibujar encima la animación AR (el canvas de A-Frame)
-                recorderCtx.drawImage(aframeCanvas, 0, 0, recorderCanvas.width, recorderCanvas.height);
-                
-                // Solicitar el siguiente frame
-                requestAnimationFrame(mixFrames);
-            }
-
-            // 4. Iniciar la grabación del stream del canvas de mezcla
-            const stream = recorderCanvas.captureStream(30); // 30 FPS
-            
-            // Intentar usar VP9 para mejor calidad/tamaño, si no, usar por defecto
-            let options = { mimeType: 'video/webm; codecs=vp9' };
-            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-                options = { mimeType: 'video/webm' };
-            }
-
-            mediaRecorder = new MediaRecorder(stream, options);
-
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) recordedChunks.push(e.data);
-            };
-
-            mediaRecorder.onstop = exportVideo;
+            // Ajustamos el canvas de grabación al tamaño real de la cámara
+            recordingCanvas.width = cameraVideo.videoWidth || 1280;
+            recordingCanvas.height = cameraVideo.videoHeight || 720;
 
             isRecording = true;
-            mediaRecorder.start();
-            
-            // Iniciar el bucle de mezcla de imágenes
-            requestAnimationFrame(mixFrames);
+            chunks = [];
 
-            btn.textContent = "Detener y Guardar";
+            // Grabamos a 30 FPS
+            const stream = recordingCanvas.captureStream(30);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+
+            mediaRecorder.ondataavailable = e => chunks.push(e.data);
+            mediaRecorder.onstop = saveVideo;
+
+            // El "Motor de Mezcla"
+            function renderFrame() {
+                if (!isRecording) return;
+
+                // 1. Dibujamos la cámara (el entorno: laptop, manos, etc)
+                ctx.drawImage(cameraVideo, 0, 0, recordingCanvas.width, recordingCanvas.height);
+                
+                // 2. Dibujamos encima el AR (la animación con transparencia)
+                ctx.drawImage(aframeCanvas, 0, 0, recordingCanvas.width, recordingCanvas.height);
+                
+                requestAnimationFrame(renderFrame);
+            }
+
+            mediaRecorder.start();
+            renderFrame();
+            
+            btn.textContent = "Detener y Descargar";
             btn.classList.add('recording');
         }
 
-        function stopRecording() {
+        function stopCapture() {
             isRecording = false;
             mediaRecorder.stop();
-            btn.textContent = "Grabar Video";
+            btn.textContent = "Iniciar Grabación";
             btn.classList.remove('recording');
         }
 
-        function exportVideo() {
-            // Crear el blob final y descargarlo
-            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        function saveVideo() {
+            const blob = new Blob(chunks, { type: 'video/webm' });
             const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            // Nombre del archivo con marca de tiempo básica
-            a.download = `ar-experiencia-${Date.now()}.webm`;
-            a.click();
-            
-            // Limpieza
-            setTimeout(() => URL.revokeObjectURL(url), 100);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `experiencia_ar_${Date.now()}.webm`;
+            link.click();
+            URL.revokeObjectURL(url);
         }
     </script>
 </body>
