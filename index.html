@@ -2,55 +2,22 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>WebAR - Grabación Total con Audio</title>
+    <title>WebAR - Grabación Estable</title>
     <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
 
     <style>
         #recording-btn {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1000;
-            padding: 15px 25px;
-            border-radius: 50px;
-            background-color: #ff0000;
-            color: white;
-            font-family: Arial, sans-serif;
-            font-weight: bold;
-            border: none;
-            cursor: pointer;
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; padding: 15px 25px; border-radius: 50px;
+            background-color: #ff0000; color: white; font-family: Arial, sans-serif;
+            font-weight: bold; border: none; cursor: pointer;
             box-shadow: 0 4px 15px rgba(0,0,0,0.4);
         }
         #recording-btn.recording { background-color: #222; animation: pulse 1s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
         #recording-canvas { display: none; }
     </style>
-
-    <script>
-        AFRAME.registerShader('video-alpha-sbs-shader', {
-            schema: { src: {type: 'map', is: 'uniform'} },
-            vertexShader: `
-                varying vec2 vUv;
-                void main() {
-                    vUv = uv;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            `,
-            fragmentShader: `
-                varying vec2 vUv;
-                uniform sampler2D src;
-                void main() {
-                    vec2 uvColor = vec2(vUv.x, vUv.y * 0.5 + 0.5);
-                    vec2 uvAlpha = vec2(vUv.x, vUv.y * 0.5);
-                    vec4 texColor = texture2D(src, uvColor);
-                    vec4 texAlpha = texture2D(src, uvAlpha);
-                    gl_FragColor = vec4(texColor.rgb, texAlpha.r);
-                }
-            `
-        });
-    </script>
 </head>
 
 <body>
@@ -59,11 +26,11 @@
 
     <a-scene mindar-image="imageTargetSrc: ./targets.mind;" 
              renderer="preserveDrawingBuffer: true; antialias: true; colorManagement: true" 
-             vr-mode-ui="enabled: false" 
-             device-orientation-permission-ui="enabled: false">
+             vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
         
         <a-assets>
-            <video id="vid" src="Video_WebAR.mp4" preload="auto" loop="true" crossorigin="anonymous" playsinline webkit-playsinline></video>
+            <video id="vid" src="Video_WebAR.mp4" preload="auto" loop="true" 
+                   crossorigin="anonymous" playsinline webkit-playsinline></video>
         </a-assets>
 
         <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
@@ -76,71 +43,72 @@
     </a-scene>
 
     <script>
+        // Shader para transparencia SBS
+        AFRAME.registerShader('video-alpha-sbs-shader', {
+            schema: { src: {type: 'map', is: 'uniform'} },
+            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            fragmentShader: `varying vec2 vUv; uniform sampler2D src; void main() { vec2 uvColor = vec2(vUv.x, vUv.y * 0.5 + 0.5); vec2 uvAlpha = vec2(vUv.x, vUv.y * 0.5); vec4 texColor = texture2D(src, uvColor); vec4 texAlpha = texture2D(src, uvAlpha); gl_FragColor = vec4(texColor.rgb, texAlpha.r); }`
+        });
+
         const btn = document.getElementById('recording-btn');
         const recordingCanvas = document.getElementById('recording-canvas');
-        const ctx = recordingCanvas.getContext('2d');
+        const ctx = recordingCanvas.getContext('2d', {alpha: false});
         const videoAnim = document.querySelector('#vid');
         
-        let mediaRecorder;
-        let chunks = [];
-        let isRecording = false;
-        let audioCtx, mixer;
+        let mediaRecorder, chunks = [], isRecording = false;
+        let audioCtx, mixer, videoSource, micSource;
 
-        // Control de Target
+        // Play/Pause al detectar target
         const targetEl = document.querySelector('[mindar-image-target]');
         targetEl.addEventListener("targetFound", () => videoAnim.play());
         targetEl.addEventListener("targetLost", () => videoAnim.pause());
 
         btn.addEventListener('click', async () => {
             if (!isRecording) {
-                // Forzar activación de audio por interacción de usuario
-                if (!audioCtx) {
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                }
-                await startCapture();
+                await initAudio(); // Inicializar audio una sola vez o reactivar
+                startCapture();
             } else {
                 stopCapture();
             }
         });
 
-        async function startCapture() {
+        async function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                mixer = audioCtx.createMediaStreamDestination();
+
+                // Conectar el video al mixer (solo una vez)
+                videoSource = audioCtx.createMediaElementSource(videoAnim);
+                videoSource.connect(mixer);
+                videoSource.connect(audioCtx.destination);
+
+                // Conectar Micrófono
+                try {
+                    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    micSource = audioCtx.createMediaStreamSource(micStream);
+                    micSource.connect(mixer);
+                } catch(e) { console.warn("Micrófono no activado"); }
+            }
+            
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+        }
+
+        function startCapture() {
             const cameraVideo = document.querySelector('video:not([id])') || document.querySelector('video');
             const aframeCanvas = document.querySelector('canvas.a-canvas');
 
             recordingCanvas.width = cameraVideo.videoWidth || 1280;
             recordingCanvas.height = cameraVideo.videoHeight || 720;
 
-            // --- MEZCLA DE AUDIO ---
-            mixer = audioCtx.createMediaStreamDestination();
-
-            // 1. Audio del Video AR
-            // Usamos captureStream si el navegador lo soporta para el video, sino AudioElementSource
-            try {
-                const videoSource = audioCtx.createMediaElementSource(videoAnim);
-                videoSource.connect(mixer);
-                videoSource.connect(audioCtx.destination); // Para escucharlo mientras grabas
-            } catch(e) { console.error("Error conectando audio del video:", e); }
-
-            // 2. Audio del Micrófono (Entorno)
-            try {
-                const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const micSource = audioCtx.createMediaStreamSource(micStream);
-                micSource.connect(mixer);
-            } catch(e) { console.warn("No se pudo acceder al micrófono"); }
-
-            // --- COMBINAR TODO ---
             const videoStream = recordingCanvas.captureStream(30);
-            const tracks = [...videoStream.getVideoTracks(), ...mixer.stream.getAudioTracks()];
-            const combinedStream = new MediaStream(tracks);
+            const combinedStream = new MediaStream([
+                ...videoStream.getVideoTracks(),
+                ...mixer.stream.getAudioTracks()
+            ]);
 
-            mediaRecorder = new MediaRecorder(combinedStream, { 
-                mimeType: 'video/webm;codecs=vp9',
-                audioBitsPerSecond: 128000
-            });
-
+            mediaRecorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm;codecs=vp9' });
             mediaRecorder.ondataavailable = e => chunks.push(e.data);
             mediaRecorder.onstop = saveVideo;
 
@@ -155,14 +123,14 @@
             }
             renderFrame();
             
-            btn.textContent = "Detener y Guardar";
+            btn.textContent = "Detener";
             btn.classList.add('recording');
         }
 
         function stopCapture() {
             isRecording = false;
             mediaRecorder.stop();
-            btn.textContent = "Iniciar Grabación";
+            btn.textContent = "Grabar de Nuevo";
             btn.classList.remove('recording');
         }
 
@@ -171,7 +139,7 @@
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `ar_completo_${Date.now()}.webm`;
+            link.download = `ar_fixed_${Date.now()}.webm`;
             link.click();
             chunks = [];
         }
