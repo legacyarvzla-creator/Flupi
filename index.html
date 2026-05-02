@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>WebAR Alpha Video - Recording</title>
+    <script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.1/dist/mindar-image-aframe.prod.js"></script>
+
+    <style>
+        /* Estilos para el botón de grabación */
+        #recording-btn {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 999;
+            padding: 15px 25px;
+            border-radius: 50px;
+            border: none;
+            background-color: #ff0000;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+        #recording-btn:active {
+            transform: translateX(-50%) scale(0.95);
+        }
+        #recording-btn.recording {
+            background-color: #555;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+    </style>
+
+    <script>
+        AFRAME.registerShader('video-alpha-sbs-shader', {
+            schema: { src: {type: 'map', is: 'uniform'} },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                varying vec2 vUv;
+                uniform sampler2D src;
+                void main() {
+                    vec2 uvColor = vec2(vUv.x, vUv.y * 0.5 + 0.5);
+                    vec2 uvAlpha = vec2(vUv.x, vUv.y * 0.5);
+                    vec4 texColor = texture2D(src, uvColor);
+                    vec4 texAlpha = texture2D(src, uvAlpha);
+                    gl_FragColor = vec4(texColor.rgb, texAlpha.r);
+                }
+            `
+        });
+    </script>
+</head>
+
+<body>
+    <!-- Botón de Interfaz -->
+    <button id="recording-btn">Grabar Pantalla</button>
+
+    <a-scene mindar-image="imageTargetSrc: ./targets.mind;" color-space="sRGB" renderer="colorManagement: true; preserveDrawingBuffer: true" vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
+        
+        <a-assets>
+            <video id="vid" src="Video_WebAR.mp4" preload="auto" loop="true" crossorigin="anonymous" playsinline webkit-playsinline></video>
+        </a-assets>
+
+        <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+        <a-entity mindar-image-target="targetIndex: 0">
+            <a-entity geometry="primitive: plane; width: 1; height: 1"
+                      material="shader: video-alpha-sbs-shader; src: #vid; transparent: true">
+            </a-entity>
+        </a-entity>
+    </a-scene>
+
+    <script>
+        // Lógica de Video (Play/Pause)
+        const targetEl = document.querySelector('[mindar-image-target]');
+        const video = document.querySelector('#vid');
+        
+        targetEl.addEventListener("targetFound", () => video.play());
+        targetEl.addEventListener("targetLost", () => video.pause());
+
+        // --- LÓGICA DE GRABACIÓN ---
+        const btn = document.getElementById('recording-btn');
+        let mediaRecorder;
+        let recordedChunks = [];
+
+        btn.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                mediaRecorder.stop();
+                btn.textContent = "Grabar Pantalla";
+                btn.classList.remove('recording');
+            } else {
+                startRecording();
+            }
+        });
+
+        function startRecording() {
+            recordedChunks = [];
+            // Capturamos el canvas de la escena (A-Frame)
+            const canvas = document.querySelector('canvas');
+            const stream = canvas.captureStream(30); // 30 FPS
+
+            mediaRecorder = new MediaRecorder(stream, {
+                mimeType: 'video/webm; codecs=vp9'
+            });
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'mi-experiencia-ar.webm';
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            mediaRecorder.start();
+            btn.textContent = "Detener";
+            btn.classList.add('recording');
+        }
+    </script>
+</body>
+</html>
